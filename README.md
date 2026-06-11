@@ -270,6 +270,16 @@ PukiWiki は保存時に `make_str_rules()` で本文を自動整形します（
 
 ---
 
+## Markdown パーサーに league/commonmark を選んだ理由
+
+前身の [pukiwiki154_md](https://github.com/m0370/pukiwiki154_md) では Parsedown（1ファイル・約100KB）を使用していました。Parsedown は軽量で導入が簡単ですが、テーブル・脚注・目次生成・見出しパーマリンクといった拡張機能を使おうとすると、別途サードパーティの拡張パッケージを探すか自前で実装する必要があります。
+
+league/commonmark 2.x は CommonMark 仕様に厳密に準拠したパーサーで、GFM テーブル・脚注・TableOfContents・HeadingPermalink などの拡張が公式パッケージに同梱されています。今回の要件である「GFM 記法・脚注・ページ内目次・見出しアンカー」のすべてが、公式にメンテナンスされた拡張として利用できます。
+
+その代償として、`plugin/markdown_parser/` に約400ファイル・2MB の依存ライブラリが必要になります。内訳はパーサー本体（AST・ブロックパーサー・インラインパーサー・レンダラー等で約300ファイル）、設定スキーマ管理（league/config + nette/schema）、オートローダー（composer）などです。Parsedown に比べれば大きいですが、サーバーへのアップロードは初回のみであり、拡張機能の品質・保守性を優先してこちらを採用しました。
+
+---
+
 ## 使用ライブラリとライセンス
 
 - **PukiWiki 1.5.4** — GPL v2 or later（`read.inc.php`・`edit.inc.php` は PukiWiki Development Team のコードの改変版、`md.inc.php` は [pukiwiki154_md](https://github.com/m0370/pukiwiki154_md) の変換ロジックを移植・再構成したもの。いずれも GPL v2+）
