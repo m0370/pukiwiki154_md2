@@ -1,5 +1,7 @@
 # PukiWiki Markdown プラグイン（plugin フォルダ完結型）
 
+**現在のバージョン: v0.1**（`md.inc.php` 内の `MD_PLUGIN_VERSION` 定数およびファイルヘッダに記載）
+
 PukiWiki 1.5.4 に **plugin フォルダへのファイル追加・差し替えだけで** Markdown 記法対応を追加するプラグインです。`lib/`・`skin/`・`pukiwiki.ini.php` には一切手を加えません。
 
 ページのいずれかの行に `#md` と書くだけで、そのページは Markdown（GitHub Flavored Markdown）として描画されます。書かなければ従来通りの PukiWiki 記法ページです。
@@ -264,3 +266,9 @@ PukiWiki は保存時に `make_str_rules()` で本文を自動整形します（
 - **league/commonmark 2.x** — BSD-3-Clause（`plugin/markdown_parser/` に同梱。GFM・Footnote・HeadingPermalink・TableOfContents 拡張を使用）
 
 本リポジトリ全体のライセンスは GPL v2 or later です（`LICENSE` 参照）。
+
+---
+
+## 更新履歴
+
+- **v0.1**（2026-06-11）: 初版。Markdown描画（GFM・脚注・ページ内目次・改行反映）、`!plugin` 対応、変換キャッシュ、保存時のデータ保護
