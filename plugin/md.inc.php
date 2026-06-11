@@ -1,6 +1,7 @@
 <?php
 // PukiWiki - Yet another WikiWikiWeb clone.
 // md.inc.php
+// Version: 0.1
 // License: GPL v2 or (at your option) any later version
 //
 // Markdown rendering plugin (plugin-folder-only implementation)
@@ -20,6 +21,7 @@
 //   $default_md                  = 1;      // 新規ページに #md を自動挿入
 //   $markdown_debug_mode         = 0;      // HTMLコメントでデバッグ情報出力
 
+define('MD_PLUGIN_VERSION', '0.1');
 define('MD_PLUGIN_PARSER_DIR', PLUGIN_DIR . 'markdown_parser/');
 define('MD_PLUGIN_FLAG_REGEX', '/^#md\s*$/m');
 
@@ -511,7 +513,7 @@ function md_convert_page($lines, $allow_cache = TRUE)
 		$result = md_convert_footnotes($raw_html);
 
 		if (md_config('markdown_debug_mode', 0)) {
-			$result = '<!-- md.inc.php debug: plugins=[' .
+			$result = '<!-- md.inc.php v' . MD_PLUGIN_VERSION . ' debug: plugins=[' .
 				htmlsc(implode(',', $debug_info['plugin_calls'])) . '] errors=[' .
 				htmlsc(implode(',', $debug_info['plugin_errors'])) . '] warnings=[' .
 				htmlsc(implode(',', $debug_info['security_warnings'])) . '] -->' . "\n" . $result;
