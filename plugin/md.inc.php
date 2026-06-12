@@ -21,7 +21,7 @@
 //   $default_md                  = 1;      // 新規ページに #md を自動挿入
 //   $markdown_debug_mode         = 0;      // HTMLコメントでデバッグ情報出力
 
-define('MD_PLUGIN_VERSION', '0.1');
+define('MD_PLUGIN_VERSION', '0.2');
 define('MD_PLUGIN_PARSER_DIR', PLUGIN_DIR . 'markdown_parser/');
 define('MD_PLUGIN_FLAG_REGEX', '/^#md\s*$/m');
 
@@ -314,6 +314,7 @@ function md_convert_footnotes($html)
 		$content = preg_replace('/<a[^>]*class="footnote-backref"[^>]*>.*?<\/a>/s', '', $content);
 		$content = trim($content);
 		$content = preg_replace('/^<p>(.*?)<\/p>$/s', '$1', $content);
+		$content = preg_replace('/(?:&nbsp;|\s)+$/', '', $content); // backref 前の区切り空白を除去
 
 		$foot_explain[$footnote_counter] = '<a id="notefoot_' . $footnote_counter . '" href="' .
 			$script . '#notetext_' . $footnote_counter . '" class="note_super">*' .
@@ -424,7 +425,8 @@ function md_convert_page($lines, $allow_cache = TRUE)
 	$use_cache   = md_config('use_markdown_cache', 1) && $allow_cache;
 	$lifetime    = md_config('markdown_cache_lifetime', 604800);
 	$hash        = md_config('markdown_support_hash_plugin', 0);
-	$parser_mode = !empty($hash) ? 'md-plugin-hash' : 'md-plugin';
+	// MD_PLUGIN_VERSION を含めることで、変換ロジック更新時に旧キャッシュを無効化する
+	$parser_mode = (!empty($hash) ? 'md-plugin-hash' : 'md-plugin') . '-v' . MD_PLUGIN_VERSION;
 	$cache_file  = null;
 
 	if ($use_cache) {
@@ -443,6 +445,17 @@ function md_convert_page($lines, $allow_cache = TRUE)
 	$result_lines = array();
 	$fence_char   = '';
 	$fence_len    = 0;
+
+	// インライン脚注（PukiWiki ((...)) / Pandoc ^[...]）の内容を退避し、
+	// Markdown 参照形式 [^label] に置き換えるためのコールバック。
+	// インライン形式のまま commonmark に渡すと脚注内容がプレーンテキスト扱いになり
+	// make_link が生成したリンク等の HTML がエスケープされてしまうため、
+	// 内容を文末の参照定義（[^label]: ...）へ移して Markdown として解釈させる。
+	$inline_footnotes  = array();
+	$stash_inline_footnote = function ($matches) use (&$inline_footnotes) {
+		$inline_footnotes[] = $matches[1];
+		return '[^mdfnauto' . count($inline_footnotes) . ']';
+	};
 
 	for ($i = 0; $i < $count; $i++) {
 		$line = $lines[$i];
@@ -475,8 +488,10 @@ function md_convert_page($lines, $allow_cache = TRUE)
 			continue;
 		}
 
-		// PukiWiki 脚注記法 ((コメント)) を Markdown インライン脚注 ^[コメント] に変換
-		$line = preg_replace('/\(\((.+?)\)\)/', '^[$1]', $line);
+		// PukiWiki 脚注記法 ((コメント)) と Pandoc インライン脚注 ^[コメント] を
+		// Markdown 参照形式 [^label] に変換（内容は文末の定義として後置する）
+		$line = preg_replace_callback('/\(\((.+?)\)\)/', $stash_inline_footnote, $line);
+		$line = preg_replace_callback('/\^\[([^\]]+)\]/', $stash_inline_footnote, $line);
 
 		// マルチラインプラグイン本文の収集
 		$line = md_collect_multiline_plugin($line, $lines, $i, $count);
@@ -497,6 +512,15 @@ function md_convert_page($lines, $allow_cache = TRUE)
 		}
 
 		$result_lines[] = str_replace(array("\r\n", "\n", "\r"), '', $line);
+	}
+
+	// 退避したインライン脚注の内容を参照定義として文末に追加。
+	// 内容にも本文と同じリンク処理（URL・[[PukiWiki]]・Markdown リンク）を通す
+	foreach ($inline_footnotes as $idx => $fn_content) {
+		$fn_content = md_process_links($fn_content, $debug_info);
+		$result_lines[] = '';
+		$result_lines[] = '[^mdfnauto' . ($idx + 1) . ']: ' .
+			str_replace(array("\r\n", "\n", "\r"), ' ', $fn_content);
 	}
 
 	$text = implode("\n", $result_lines);
