@@ -1,7 +1,7 @@
 <?php
 // PukiWiki - Yet another WikiWikiWeb clone.
 // md.inc.php
-// Version: 0.2
+// Version: 0.3
 // License: GPL v2 or (at your option) any later version
 //
 // Markdown rendering plugin (plugin-folder-only implementation)
@@ -20,8 +20,10 @@
 //   $markdown_support_hash_plugin = 0;     // 1にすると !plugin に加え #plugin も許可
 //   $default_md                  = 1;      // 新規ページに #md を自動挿入
 //   $markdown_debug_mode         = 0;      // HTMLコメントでデバッグ情報出力
+//   $markdown_cache_dynamic_plugins = array('include','pcomment','comment','recent','popular','counter','online','calendar','showrss','ls','ls2');
+//     // キャッシュ時に毎回再実行するブロックプラグイン（インラインプラグインは対象外）
 
-define('MD_PLUGIN_VERSION', '0.2');
+define('MD_PLUGIN_VERSION', '0.3');
 define('MD_PLUGIN_PARSER_DIR', PLUGIN_DIR . 'markdown_parser/');
 define('MD_PLUGIN_FLAG_REGEX', '/^#md\s*$/m');
 
@@ -41,6 +43,18 @@ function plugin_md_convert()
 function md_config($name, $default)
 {
 	return isset($GLOBALS[$name]) ? $GLOBALS[$name] : $default;
+}
+
+function md_is_dynamic_plugin($name)
+{
+	static $list = null;
+	if ($list === null) {
+		$list = array_flip(md_config('markdown_cache_dynamic_plugins',
+			array('include', 'pcomment', 'comment', 'recent',
+			      'popular', 'counter', 'online', 'calendar',
+			      'showrss', 'ls', 'ls2')));
+	}
+	return isset($list[$name]);
 }
 
 // Markdown ページかどうか（文字列・行配列のどちらでも判定可）
@@ -98,6 +112,10 @@ function md_do_plugin_convert($name, $args = '', $body = null)
 {
 	global $digest;
 
+	if (!exist_plugin_convert($name)) {
+		return '<div class="alert alert-warning">Plugin "!' .
+			htmlsc($name) . '" not found.</div>';
+	}
 	if (do_plugin_init($name) === FALSE) {
 		return '[Plugin init failed: ' . htmlsc($name) . ']';
 	}
@@ -154,7 +172,8 @@ function md_collect_multiline_plugin($line, $lines, &$i, $count)
 
 // ブロックプラグイン行（!plugin / 設定により #plugin）の処理
 // プラグイン行でなければ null を返す
-function md_process_block_plugin($line, &$debug_info)
+// $dynamic_descriptors が非nullの場合、動的プラグインはプレースホルダーに置換する
+function md_process_block_plugin($line, &$debug_info, &$dynamic_descriptors = null)
 {
 	$hash = md_config('markdown_support_hash_plugin', 0);
 
@@ -178,6 +197,21 @@ function md_process_block_plugin($line, &$debug_info)
 		    preg_match('/\{{' . $len . '}\s*\r(.*)\r\}{' . $len . '}/', $line, $m_body)) {
 			$body = $m_body[1];
 		}
+
+		if ($dynamic_descriptors !== null && md_is_dynamic_plugin($plugin)) {
+			$idx   = count($dynamic_descriptors);
+			$nonce = $GLOBALS['_md_cache_nonce'];
+			$token = '<!--MD_DYNAMIC:' . $nonce . ':' . $idx . '-->';
+			$dynamic_descriptors[] = array(
+				'name'  => $plugin,
+				'args'  => $args,
+				'body'  => $body,
+				'token' => $token,
+			);
+			$debug_info['plugin_calls'][] = $plugin . '(deferred)';
+			return $token;
+		}
+
 		try {
 			$line = md_do_plugin_convert($plugin, $args, $body);
 			$debug_info['plugin_calls'][] = $plugin;
@@ -362,7 +396,7 @@ function md_cache_cleanup($lifetime)
 	}
 }
 
-function md_cache_read($cache_file, $cache_digest, $parser_mode, $lifetime)
+function md_cache_read_full($cache_file, $cache_digest, $parser_mode, $lifetime)
 {
 	if (!file_exists($cache_file)) return null;
 
@@ -380,6 +414,7 @@ function md_cache_read($cache_file, $cache_digest, $parser_mode, $lifetime)
 
 	$cached = @json_decode($content, true);
 	if (!is_array($cached) ||
+	    !isset($cached['version']) || $cached['version'] < 3 ||
 	    !isset($cached['digest']) || $cached['digest'] !== $cache_digest ||
 	    !isset($cached['parser']) || $cached['parser'] !== $parser_mode ||
 	    !isset($cached['html'])) {
@@ -391,22 +426,56 @@ function md_cache_read($cache_file, $cache_digest, $parser_mode, $lifetime)
 		return null; // Expired
 	}
 
-	return $cached['html'];
+	return array(
+		'html'    => $cached['html'],
+		'dynamic' => isset($cached['dynamic']) && is_array($cached['dynamic'])
+		             ? $cached['dynamic'] : array(),
+	);
 }
 
-function md_cache_write($cache_file, $cache_digest, $parser_mode, $html)
+function md_cache_write($cache_file, $cache_digest, $parser_mode, $html, $dynamic = array())
 {
 	$cache_data = array(
 		'digest'    => $cache_digest,
 		'parser'    => $parser_mode,
 		'html'      => $html,
+		'dynamic'   => !empty($dynamic) ? $dynamic : null,
 		'timestamp' => time(),
-		'version'   => 2,
+		'version'   => 3,
 	);
 	$json = json_encode($cache_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 	if ($json === false) return;
 	if (!is_dir(CACHE_DIR) && !@mkdir(CACHE_DIR, 0755, true)) return;
 	@file_put_contents($cache_file, $json, LOCK_EX);
+}
+
+function md_resolve_dynamic_placeholders($html, $descriptors)
+{
+	if (empty($descriptors)) return $html;
+
+	$map = array();
+	foreach ($descriptors as $desc) {
+		$map[$desc['token']] = $desc;
+	}
+
+	return preg_replace_callback(
+		'/<!--MD_DYNAMIC:[0-9a-f]{8}:\d+-->/',
+		function ($m) use ($map) {
+			$token = $m[0];
+			if (!isset($map[$token])) return $token;
+			$desc = $map[$token];
+			try {
+				return md_do_plugin_convert(
+					$desc['name'],
+					isset($desc['args']) ? $desc['args'] : '',
+					isset($desc['body']) ? $desc['body'] : null
+				);
+			} catch (Throwable $e) {
+				return md_format_error('plugin_block', $desc['name'], $e);
+			}
+		},
+		$html
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -434,15 +503,21 @@ function md_convert_page($lines, $allow_cache = TRUE)
 	$parser_mode = (!empty($hash) ? 'md-plugin-hash' : 'md-plugin') . '-v' . MD_PLUGIN_VERSION;
 	$cache_file  = null;
 
+	// 動的プラグインのプレースホルダー用 nonce（cache_digest 先頭8文字）
+	$GLOBALS['_md_cache_nonce'] = substr($cache_digest, 0, 8);
+	$dynamic_descriptors = array();
+
 	if ($use_cache) {
 		$page_name  = isset($vars['page']) ? $vars['page'] : 'unknown';
 		$cache_key  = md5($page_name . ':' . $parser_mode . ':' . $cache_digest);
 		$cache_file = CACHE_DIR . 'markdown_' . $cache_key . '.cache';
 
-		$cached_html = md_cache_read($cache_file, $cache_digest, $parser_mode, $lifetime);
-		if ($cached_html !== null) {
+		$cached = md_cache_read_full($cache_file, $cache_digest, $parser_mode, $lifetime);
+		if ($cached !== null) {
 			// キャッシュヒット時も脚注処理は毎回必要（$foot_explain を更新するため）
-			return md_convert_footnotes($cached_html);
+			$result = md_convert_footnotes($cached['html']);
+			// 動的プラグインはキャッシュヒット時も毎回再実行する
+			return md_resolve_dynamic_placeholders($result, $cached['dynamic']);
 		}
 	}
 
@@ -501,8 +576,12 @@ function md_convert_page($lines, $allow_cache = TRUE)
 		// マルチラインプラグイン本文の収集
 		$line = md_collect_multiline_plugin($line, $lines, $i, $count);
 
-		// ブロックプラグイン
-		$plugin_result = md_process_block_plugin($line, $debug_info);
+		// ブロックプラグイン（キャッシュ有効時は動的プラグインをプレースホルダーに置換）
+		if ($use_cache) {
+			$plugin_result = md_process_block_plugin($line, $debug_info, $dynamic_descriptors);
+		} else {
+			$plugin_result = md_process_block_plugin($line, $debug_info);
+		}
 		if ($plugin_result !== null) {
 			$line = $plugin_result;
 		} else {
@@ -535,11 +614,12 @@ function md_convert_page($lines, $allow_cache = TRUE)
 		$raw_html = $parser->convert($text)->getContent();
 
 		if ($use_cache && $cache_file !== null) {
-			md_cache_write($cache_file, $cache_digest, $parser_mode, $raw_html);
+			md_cache_write($cache_file, $cache_digest, $parser_mode, $raw_html, $dynamic_descriptors);
 			md_cache_cleanup($lifetime);
 		}
 
 		$result = md_convert_footnotes($raw_html);
+		$result = md_resolve_dynamic_placeholders($result, $dynamic_descriptors);
 
 		if (md_config('markdown_debug_mode', 0)) {
 			$result = '<!-- md.inc.php v' . MD_PLUGIN_VERSION . ' debug: plugins=[' .
