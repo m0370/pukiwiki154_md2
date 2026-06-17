@@ -1,7 +1,7 @@
 <?php
 // PukiWiki - Yet another WikiWikiWeb clone.
 // md.inc.php
-// Version: 0.1
+// Version: 0.2
 // License: GPL v2 or (at your option) any later version
 //
 // Markdown rendering plugin (plugin-folder-only implementation)
