@@ -272,7 +272,12 @@ function md_init_parser()
 	));
 
 	$environment->addExtension(new \League\CommonMark\Extension\CommonMark\CommonMarkCoreExtension());
-	$environment->addExtension(new \League\CommonMark\Extension\GithubFlavoredMarkdownExtension());
+	// GFMバンドルは使わない: 同梱の DisallowedRawHtml(tagfilter) が
+	// プラグイン出力の <textarea> 等をエスケープしてしまうため、個別に登録する
+	$environment->addExtension(new \League\CommonMark\Extension\Autolink\AutolinkExtension());
+	$environment->addExtension(new \League\CommonMark\Extension\Strikethrough\StrikethroughExtension());
+	$environment->addExtension(new \League\CommonMark\Extension\Table\TableExtension());
+	$environment->addExtension(new \League\CommonMark\Extension\TaskList\TaskListExtension());
 	$environment->addExtension(new \League\CommonMark\Extension\Footnote\FootnoteExtension());
 	// 見出しアンカーと [TOC] プレースホルダによるページ内目次
 	$environment->addExtension(new \League\CommonMark\Extension\HeadingPermalink\HeadingPermalinkExtension());
@@ -544,7 +549,8 @@ function md_convert_page($lines, $allow_cache = TRUE)
 		}
 
 		return $result;
-	} catch (Exception $e) {
+	} catch (Throwable $e) {
+		// Errorも捕捉（クラス欠落等でFatalにせずエラー表示に劣化させる）
 		return md_format_error('parser', '', $e);
 	}
 }
