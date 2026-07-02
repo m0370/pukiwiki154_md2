@@ -23,7 +23,7 @@
 //   $markdown_cache_dynamic_plugins = array('include','pcomment','comment','recent','popular','counter','online','calendar','showrss','ls','ls2');
 //     // キャッシュ時に毎回再実行するブロックプラグイン（インラインプラグインは対象外）
 
-define('MD_PLUGIN_VERSION', '0.3');
+define('MD_PLUGIN_VERSION', '0.4');
 define('MD_PLUGIN_PARSER_DIR', PLUGIN_DIR . 'markdown_parser/');
 define('MD_PLUGIN_FLAG_REGEX', '/^#md\s*$/m');
 
@@ -62,6 +62,73 @@ function md_is_markdown($source)
 {
 	if (is_array($source)) $source = implode('', $source);
 	return (bool) preg_match(MD_PLUGIN_FLAG_REGEX, str_replace("\r", '', $source));
+}
+
+// ---------------------------------------------------------------------------
+// 外部ライター互換（External writer compatibility）
+//
+// PukiWiki 本体の page_write() は保存時に make_str_rules() を通し、
+// '*' で始まる行（Markdown の箇条書き・強調）へ見出しアンカー ' [#xxxxxxxx]' を
+// 付与してしまう。page_write() 内部にプラグインフックは存在しないため、
+// 差し替え版 edit.inc.php 以外の書き込み経路（REST API・draft 公開・
+// 他プラグインの素の page_write() 呼び出し）では付与を防げない。
+//
+// そこで本プラグインは次の二段構えで書き込み元非依存の互換性を保つ:
+//   1. 描画時: md_strip_fixed_heading_anchors() で混入アンカーを除去してから
+//      Markdown パーサーへ渡す（md_convert_page 内）→ 表示は常に正しい
+//   2. 保存時: md_page_write() が本文を自己修復してから保存する
+//      （差し替え版 edit.inc.php が使用。外部連携もこの関数を利用できる）
+//
+// make_str_rules() のアンカー付与は冪等（既にあれば追加しない）なので、
+// 外部ライターが何度書いてもアンカーは行あたり 1 個を超えて蓄積しない。
+
+// make_str_rules() が付与した固定見出しアンカーを除去する（付与ロジックの逆変換）。
+// 対象は「'*' で始まる行の行末」かつ「generate_fixed_heading_anchor_id() が生成する
+// 形状（英小文字1字＋16進7字）」の [#xxxxxxxx] のみ。行中の [#...] や
+// 手書きの [#section1] のような ID には触れないため、フェンスコードブロック内の
+// 行に適用しても実質的な誤除去は起きない（外部ライターの page_write() は
+// フェンス内の '*' 行も汚染するため、除去もフェンス内を含めて行う）。
+function md_strip_fixed_heading_anchors($text)
+{
+	return preg_replace(
+		'/^(\*{1,3}.*?)\s*\[#[a-z][0-9a-f]{7}\]\s*$/m',
+		'$1',
+		$text
+	);
+}
+
+// page_write() の Markdown 安全ラッパー。
+//
+// #md ページの場合:
+//   - 本文中の混入済み固定アンカーを除去（自己修復）
+//   - $str_rules / $fixed_heading_anchor を一時無効化して page_write() を呼ぶ
+//     （make_str_rules() による本文変形を防ぐ）
+// 非 md ページの場合はそのまま page_write() に委譲する（挙動変化なし）。
+//
+// 差し替え版 edit.inc.php のほか、draft プラグイン等の外部連携からも
+// function_exists('md_page_write') で検出して利用できる。
+function md_page_write($page, $postdata, $notimestamp = FALSE)
+{
+	if (!md_is_markdown($postdata)) {
+		page_write($page, $postdata, $notimestamp);
+		return;
+	}
+
+	global $str_rules, $fixed_heading_anchor;
+
+	// 他経路の page_write() で混入したアンカーを保存前に掃除する
+	$postdata = md_strip_fixed_heading_anchors($postdata);
+
+	$save_rules  = $str_rules;
+	$save_anchor = $fixed_heading_anchor;
+	$str_rules   = array();
+	$fixed_heading_anchor = 0;
+	try {
+		page_write($page, $postdata, $notimestamp);
+	} finally {
+		$str_rules = $save_rules;
+		$fixed_heading_anchor = $save_anchor;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -539,6 +606,13 @@ function md_convert_page($lines, $allow_cache = TRUE)
 
 	for ($i = 0; $i < $count; $i++) {
 		$line = $lines[$i];
+
+		// 外部ライター（REST API・draft 等の素の page_write()）で混入した
+		// 固定見出しアンカー ' [#xxxxxxxx]' を除去する。
+		// make_str_rules() はフェンスを知らずフェンス内の '*' 行も汚染するため、
+		// フェンス判定より前に（＝フェンス内にも）適用する。
+		// 生成 ID の形状（英小文字1字＋16進7字）に限定しているので誤除去は実質ない。
+		$line = md_strip_fixed_heading_anchors($line);
 
 		// フェンスコードブロック内は一切加工しない
 		if (preg_match('/^[ ]{0,3}(`{3,}|~{3,})/', $line, $matches)) {

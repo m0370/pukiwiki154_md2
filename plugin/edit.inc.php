@@ -290,21 +290,13 @@ function plugin_edit_write()
 		return $retvars;
 	}
 
-	// Markdown page: prevent make_str_rules() in page_write() from rewriting
-	// the body (e.g. appending [#anchor] to lines starting with *)
-	$md_mode = exist_plugin('md') && function_exists('md_is_markdown') &&
-		md_is_markdown($postdata);
-	if ($md_mode) {
-		global $str_rules, $fixed_heading_anchor;
-		$md_save_rules  = $str_rules;
-		$md_save_anchor = $fixed_heading_anchor;
-		$str_rules = array();
-		$fixed_heading_anchor = 0;
-	}
-	page_write($page, $postdata, $notimeupdate != 0 && $notimestamp);
-	if ($md_mode) {
-		$str_rules = $md_save_rules;
-		$fixed_heading_anchor = $md_save_anchor;
+	// Markdown page: md_page_write() が make_str_rules() による本文変形を防ぎ、
+	// 他経路（REST API・draft 等）で混入した [#anchor] も保存前に自己修復する。
+	// md プラグインが無い環境では従来どおり素の page_write() にフォールバック。
+	if (exist_plugin('md') && function_exists('md_page_write')) {
+		md_page_write($page, $postdata, $notimeupdate != 0 && $notimestamp);
+	} else {
+		page_write($page, $postdata, $notimeupdate != 0 && $notimestamp);
 	}
 	pkwk_headers_sent();
 	header('Location: ' . get_page_uri($page, PKWK_URI_ROOT));

@@ -155,9 +155,14 @@ Markdown 変換は league/commonmark が行いますが、その前段で `md.in
 5. `!plugin` 行をプラグイン呼び出しに変換（複数行 `{{ }}` 含む）
 6. Markdown リンクの URL スキーム検査（`javascript:` 等を遮断）後、PukiWiki の `make_link()` でリンク・インラインプラグインを HTML 化
 
-### 保存時のデータ保護
+### 保存時のデータ保護と外部ライター互換（v0.4）
 
-PukiWiki は保存時に `make_str_rules()` で本文を自動整形します（`*` で始まる行への `[#アンカー]` 自動付与など）。Markdown の `* リスト` 行が破壊されるのを防ぐため、差し替え版 `edit.inc.php` は `#md` ページの保存時のみ `$str_rules` と `$fixed_heading_anchor` を一時的に無効化します。PukiWiki 記法ページの保存は従来通りです（検証済み）。
+PukiWiki は保存時に `make_str_rules()` で本文を自動整形します（`*` で始まる行への `[#アンカー]` 自動付与など）。`page_write()` の内部にプラグインが介入できるフックは存在しないため、本プラグインは**二段構え**で Markdown 本文を保護します。
+
+1. **描画時の耐性**: `md_convert_page()` が、`make_str_rules()` の生成 ID 形状（英小文字1字＋16進7字）に一致する行末アンカーを除去してから Markdown パーサーへ渡します。これにより **REST API・draft プラグイン・他プラグインなど「素の `page_write()`」で書かれた `#md` ページでも表示は常に正しくなります**（フェンスコードブロック内の汚染も復元。手書きの `[#section1]` のような ID は形状が異なるため除去されません）
+2. **保存時の自己修復**: 公開関数 `md_page_write($page, $postdata, $notimestamp)` が、①混入済みアンカーを除去 → ② `$str_rules`／`$fixed_heading_anchor` を一時無効化して `page_write()` を実行します。差し替え版 `edit.inc.php` はこれを使うため、**外部経路で付いたアンカーは次に Web UI で編集・保存した時点でソースからも消えます**。非 `#md` ページはそのまま `page_write()` に委譲され、挙動は従来通りです
+
+外部ツールから `#md` ページを書き込む場合、`function_exists('md_page_write')` を検出して `md_page_write()` を呼べばソースを常にクリーンに保てます（呼ばなくても上記 1. により表示は正常です）。
 
 ---
 
@@ -241,24 +246,15 @@ PukiWiki は保存時に `make_str_rules()` で本文を自動整形します（
  		$body .= '<div id="preview">' . $postdata . '</div>' . "\n";
 ```
 
-**3. 保存時の自動整形回避**（`plugin_edit_write()`）：
+**3. 保存時の自動整形回避＋自己修復**（`plugin_edit_write()`、v0.4 で簡素化）：
 
 ```diff
-+	// Markdown page: prevent make_str_rules() in page_write() from rewriting
-+	// the body (e.g. appending [#anchor] to lines starting with *)
-+	$md_mode = exist_plugin('md') && function_exists('md_is_markdown') &&
-+		md_is_markdown($postdata);
-+	if ($md_mode) {
-+		global $str_rules, $fixed_heading_anchor;
-+		$md_save_rules  = $str_rules;
-+		$md_save_anchor = $fixed_heading_anchor;
-+		$str_rules = array();
-+		$fixed_heading_anchor = 0;
-+	}
- 	page_write($page, $postdata, $notimeupdate != 0 && $notimestamp);
-+	if ($md_mode) {
-+		$str_rules = $md_save_rules;
-+		$fixed_heading_anchor = $md_save_anchor;
++	// Markdown page: md_page_write() が make_str_rules() による本文変形を防ぎ、
++	// 他経路（REST API・draft 等）で混入した [#anchor] も保存前に自己修復する。
++	if (exist_plugin('md') && function_exists('md_page_write')) {
++		md_page_write($page, $postdata, $notimeupdate != 0 && $notimestamp);
++	} else {
+ 		page_write($page, $postdata, $notimeupdate != 0 && $notimestamp);
 +	}
 ```
 
@@ -268,7 +264,8 @@ PukiWiki は保存時に `make_str_rules()` で本文を自動整形します（
 
 - **`#contents` は Markdown ページ内の見出しのみ対象**です（league/commonmark の TableOfContents 拡張による生成）。他ページの見出しを収集する `#contentsx` 等のサードパーティプラグインの Markdown 対応は別途プラグイン側の改造が必要です
 - `include`・`menu`（MenuBar）・`calendar_viewer` など **`convert_html()` を直接呼ぶプラグインから参照された場合**、`#md` ページは PukiWiki 記法として描画されます（`#md` の行は `plugin_md_convert()` により非表示）。必要に応じて各プラグインの差し替えで対応可能です
-- 素の PukiWiki（本プラグインなし）で `#md` ページを**編集・保存**すると、`make_str_rules()` の自動整形（`*` 行へのアンカー付与等）が Markdown 本文に適用される可能性があります。閲覧のみであれば問題ありません
+- 素の PukiWiki（本プラグインなし）で `#md` ページを**編集・保存**すると、`make_str_rules()` の自動整形（`*` 行へのアンカー付与等）が Markdown 本文に適用される可能性があります。閲覧のみであれば問題ありません（v0.4 以降、本プラグイン導入環境ではアンカーは描画時に除去され、Web 編集時にソースからも自動除去されます）
+- `$str_rules` のマクロ（`&now;` `&date;` `&time;` 等の文字列）は、外部経路（REST API 等の素の `page_write()`）で `#md` ページを保存した場合に日時等へ置換されます。置換は破壊的なため描画側では復元できません（Markdown 文中にこれらの文字列が現れることは稀です）。Web UI／`md_page_write()` 経由の保存では置換されません。Markdown 主体のサイトでは `pukiwiki.ini.php` で `$fixed_heading_anchor = 0;` にすればアンカー混入自体を止められます（PukiWiki 記法ページの固定アンカーは失われます）
 - 編集フォームは素の PukiWiki のまま（プレーンな textarea）です。EasyMDE 等のビジュアルエディタは含みません
 
 ---
@@ -294,6 +291,7 @@ league/commonmark 2.x は CommonMark 仕様に厳密に準拠したパーサー�
 
 ## 更新履歴
 
+- **v0.4**（2026-07-02）: 外部ライター互換。REST API・draft プラグイン等が「素の `page_write()`」で `#md` ページを書いても描画が壊れないよう、描画時に固定見出しアンカー（生成 ID 形状のみ）を除去。保存ヘルパ `md_page_write()` を新設し、Web 編集時に混入アンカーをソースからも自己修復（差し替え版 `edit.inc.php` はこれを使用）。変換ロジック変更のためキャッシュは自動再生成される。テスト `test/external_writer_test.php` を追加
 - **v0.3**（2026-06-17）: 動的ブロックプラグイン（`include`, `pcomment`, `recent` 等）をキャッシュから除外し毎回再実行するプレースホルダー方式を導入。キャッシュ有効時でもコメント・最近の更新等が正しく反映される
 - **v0.2**（2026-06-17）: 本番版（oncologynote.jp）の改良を導入。GFMバンドルを個別拡張に分割（プラグイン出力の `<textarea>` 等のエスケープ問題を回避）、例外処理を Throwable に変更（Fatalエラーも捕捉）
 - **v0.1**（2026-06-11）: 初版。Markdown描画（GFM・脚注・ページ内目次・改行反映）、`!plugin` 対応、変換キャッシュ、保存時のデータ保護
