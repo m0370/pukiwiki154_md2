@@ -1,7 +1,7 @@
 <?php
 // PukiWiki - Yet another WikiWikiWeb clone.
 // md.inc.php
-// Version: 0.3
+// Version: 0.5
 // License: GPL v2 or (at your option) any later version
 //
 // Markdown rendering plugin (plugin-folder-only implementation)
@@ -23,7 +23,7 @@
 //   $markdown_cache_dynamic_plugins = array('include','pcomment','comment','recent','popular','counter','online','calendar','showrss','ls','ls2');
 //     // キャッシュ時に毎回再実行するブロックプラグイン（インラインプラグインは対象外）
 
-define('MD_PLUGIN_VERSION', '0.4');
+define('MD_PLUGIN_VERSION', '0.5');
 define('MD_PLUGIN_PARSER_DIR', PLUGIN_DIR . 'markdown_parser/');
 define('MD_PLUGIN_FLAG_REGEX', '/^#md\s*$/m');
 
@@ -650,6 +650,14 @@ function md_convert_page($lines, $allow_cache = TRUE)
 		// マルチラインプラグイン本文の収集
 		$line = md_collect_multiline_plugin($line, $lines, $i, $count);
 
+		// 引用の行頭マーカー（> / >> / > > 等）は make_link() の htmlsc() で &gt; になり
+		// commonmark が引用と認識できないため、切り離して処理し最後に付け直す
+		$bq_prefix = '';
+		if (preg_match('/^(?:[ ]{0,3}>[ ]?)+/', $line, $bq_matches)) {
+			$bq_prefix = $bq_matches[0];
+			$line = (string)substr($line, strlen($bq_prefix));
+		}
+
 		// ブロックプラグイン（キャッシュ有効時は動的プラグインをプレースホルダーに置換）
 		if ($use_cache) {
 			$plugin_result = md_process_block_plugin($line, $debug_info, $dynamic_descriptors);
@@ -669,7 +677,7 @@ function md_convert_page($lines, $allow_cache = TRUE)
 			}
 		}
 
-		$result_lines[] = str_replace(array("\r\n", "\n", "\r"), '', $line);
+		$result_lines[] = $bq_prefix . str_replace(array("\r\n", "\n", "\r"), '', $line);
 	}
 
 	// 退避したインライン脚注の内容を参照定義として文末に追加。

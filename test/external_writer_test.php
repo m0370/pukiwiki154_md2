@@ -62,7 +62,7 @@ function stored($page) {
 echo "== 前提 ==\n";
 ok($GLOBALS['fixed_heading_anchor'] == 1, 'fixed_heading_anchor が有効（汚染が起きる設定）');
 ok(function_exists('md_page_write'), 'md_page_write() が定義されている');
-ok(MD_PLUGIN_VERSION === '0.4', 'MD_PLUGIN_VERSION = 0.4（キャッシュ自動無効化）');
+ok(MD_PLUGIN_VERSION === '0.5', 'MD_PLUGIN_VERSION = 0.5（キャッシュ自動無効化）');
 
 // =========================================================================
 echo "\n== 1. 外部ライター耐性（素の page_write でも描画が正しい） ==\n";
@@ -150,6 +150,30 @@ if (is_dir($sample_dir)) {
     }
 }
 if ($checked === 0) echo "  （サンプル #md ページなし — スキップ）\n";
+
+// =========================================================================
+echo "\n== 7. 引用ブロック（v0.5） ==\n";
+// =========================================================================
+$GLOBALS['vars']['page'] = 'MDテスト/引用';
+$bq = function ($text) {
+    return md_convert_page(explode("\n", "#md\n" . $text . "\n"), false);
+};
+$h = $bq("> 一行目\n> 二行目");
+ok(substr_count($h, '<blockquote>') === 1 && strpos($h, '&gt;') === false, '行頭の > が引用になる');
+ok(preg_match('/一行目<br \/>\s*二行目/', $h) === 1, '引用内の連続行が改行される');
+$h = $bq("> 外側\n>\n> > 内側");
+ok(substr_count($h, '<blockquote>') === 2, '入れ子の引用（> >）');
+$h = $bq("   > 字下げ3つ");
+ok(strpos($h, '<blockquote>') !== false, '行頭の空白3つまでは引用');
+$h = $bq("> [[FrontPage]] と脚注((引用内の脚注))");
+ok(strpos($h, '<blockquote>') !== false && strpos($h, 'FrontPage</a>') !== false, '引用内の PukiWiki リンク');
+ok(strpos($h, 'class="note_super"') !== false && strpos($h, '((') === false, '引用内の脚注');
+$h = $bq("> <script>alert(1)</script>");
+ok(strpos($h, '<script>') === false && strpos($h, '&lt;script&gt;') !== false, '引用内の HTML はエスケープされたまま');
+$h = $bq("文中の a > b は記号のまま");
+ok(strpos($h, '<blockquote>') === false && strpos($h, 'a &gt; b') !== false, '行頭以外の > は引用にならない');
+$h = $bq("```\n> コード内\n```");
+ok(strpos($h, '<blockquote>') === false && strpos($h, '&gt; コード内') !== false, 'コードフェンス内の > は変化しない');
 
 // -------------------------------------------------------------------------
 echo "\n----------------------------------------\n結果: {$pass} passed, {$fail} failed\n";
